@@ -19,7 +19,8 @@ If that still doesn't work, open an issue.
 
 ## Chrome Notice 🚨
 
-Look, Chrome isn't being a good girl.
+Look, Chrome isn't being a good girl. I mean if you can set the proxies into chrome somehow, it should work.
+I tested with `google-chrome-stable --proxy="http://127.0.0.1:8080/` it doesnt work ok?
 I tested with Firefox. It works perfectly on Firefox.
 
 Any browser works — just set your proxy to `127.0.0.1:8080` and reload WAFFLE after installation. That's literally it. Stop using Chrome anyway.
