@@ -1,21 +1,32 @@
-MIT License
+WAFFLE Public License v1.0
+Copyright (c) 2026 AstroJr0
 
-Copyright (c) 2026 uvz0
+Everyone is permitted to copy, use, modify, merge, publish, and distribute
+this software and associated documentation files (the "Software"), subject
+to the following conditions:
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. NON-COMMERCIAL USE
+   You can do whatever you want with it. Fork it. Break it. Fix it.
+   Wrap it in a trench coat and sell it to your friends as "AI".
+   No credit required for non-commercial use.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. COMMERCIAL USE
+   If you are making money — directly or indirectly — using this Software,
+   you must clearly state in your product, documentation, or marketing:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+       "Built with WAFFLE by AstroJr0"
+       (https://github.com/AstroJr0/waffle)
+
+   That's it. One line. You can afford it.
+
+3. NO WARRANTY
+   This software is provided "as is", without warranty of any kind,
+   express or implied. If it blocks a site it shouldn't, unblocks one
+   it should, sets your computer on fire, or causes an existential crisis —
+   that's on you. AstroJr0 is not responsible.
+
+4. REDISTRIBUTION
+   Redistributions must retain this license and the copyright notice above.
+
+TL;DR: Free for everyone. Credit AstroJr0 if you're making money off it.
+       No warranty. Don't be evil.

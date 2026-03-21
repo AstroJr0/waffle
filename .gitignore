@@ -1,0 +1,32 @@
+# PyInstaller
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+
+# pip
+pip-log.txt
+
+# env
+.env
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WAFFLE runtime files (never commit these — they contain private keys)
+*.key
+ca.crt
+ca.csr
+waffle.pid
+waffle.log
+waffle.log.*
+certs/
