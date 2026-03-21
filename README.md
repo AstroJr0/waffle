@@ -6,7 +6,7 @@
 Built by a teenager who got tired of his own bad habits and decided to write code about it instead.
 Tested on Firefox. Chrome is being difficult. We don't talk about Chrome.
 
----
+
 
 ## Does it work?
 
@@ -15,7 +15,7 @@ Tested on Firefox. Chrome is being difficult. We don't talk about Chrome.
 If it doesn't — speak it out loud. Say "WAFFLE please work" three times.
 If that still doesn't work, open an issue.
 
----
+
 
 ## Chrome Notice 🚨
 
@@ -24,7 +24,7 @@ I tested with Firefox. It works perfectly on Firefox.
 
 Any browser works — just set your proxy to `127.0.0.1:8080` and reload WAFFLE after installation. That's literally it. Stop using Chrome anyway.
 
----
+
 
 ## What is this
 
@@ -38,7 +38,7 @@ WAFFLE is a local HTTP/HTTPS proxy that:
 
 It's basically a bouncer for your browser. Except the bouncer is a Python script and the club is the internet.
 
----
+
 
 ## Installation
 
@@ -66,7 +66,7 @@ sudo mv waffle /usr/local/bin/waffle
 bash setup.sh
 ```
 
----
+
 
 ### Option B — Clone the repo (for people who like reading code)
 
@@ -83,7 +83,7 @@ setup.bat
 
 The setup script handles everything — CA generation, Chrome NSS install, certutil, the works.
 
----
+
 
 ## Usage
 
@@ -101,7 +101,6 @@ waffle --list                        # see everything you've blocked
 waffle --reload                      # restart daemon after config changes
 ```
 
----
 
 ## First-time SSL setup (do this once)
 
@@ -129,7 +128,7 @@ WAFFLE runs a proxy on `127.0.0.1:8080`.
 Blocking is prefix-based. Block `example.com` and every path under it is blocked too.
 Both `http://` and `https://` are always checked regardless of what you typed when adding.
 
----
+
 
 ## Config
 
@@ -141,7 +140,6 @@ https://time-wasting-site.com
 # comments work too
 ```
 
----
 
 ## Building from source
 
@@ -158,20 +156,20 @@ git push origin v1.4.0
 # Actions tab → Build WAFFLE Binaries → Run workflow
 ```
 
----
+
 
 ## License
 
 Free for everyone. If you're making money off it, credit **AstroJr0**.
 No warranty. See [LICENSE](LICENSE).
 
----
+
 
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 TL;DR: real fixes only, branch workflow, don't lie to the codebase.
 
----
+
 
 *made with intention. alhamdulillah.*
