@@ -77,7 +77,10 @@ jobs:
             waffle.py
 
       - name: Smoke test
+        env:
+          PYTHONUTF8: "1"
         run: |
+          chcp 65001
           .\dist\waffle.exe --version
           .\dist\waffle.exe --help
 
