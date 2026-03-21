@@ -34,11 +34,16 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
-# ── Force UTF-8 output on Windows (CP1252 can't handle ✔ ✖ ● etc.) ──────────
+# ── Force UTF-8 on Windows ────────────────────────────────────────────────────
+# Must happen before ANY print() call. reconfigure() works inside PyInstaller
+# binaries where TextIOWrapper wrapping does not.
 if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except AttributeError:
+        # reconfigure not available (Python < 3.7) — set env var as last resort
+        os.environ.setdefault("PYTHONUTF8", "1")
 
 # ── Version & App identity ────────────────────────────────────────────────────
 
