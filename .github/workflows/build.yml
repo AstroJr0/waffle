@@ -1,0 +1,172 @@
+name: Build WAFFLE Binaries
+
+on:
+  workflow_dispatch:       
+    inputs:
+      version:
+        description: "Release version (e.g. v1.4.0)"
+        required: true
+        default: "v1.4.0"
+
+permissions:
+  contents: write           
+
+jobs:
+  # ── Linux binary ───────────────────────────────────────────────────────────
+  build-linux:
+    name: Build — Linux (waffle)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller cryptography
+
+      - name: Build binary
+        run: |
+          python -m PyInstaller \
+            --onefile \
+            --name waffle \
+            --strip \
+            waffle.py
+
+      - name: Smoke test
+        run: |
+          ./dist/waffle --version
+          ./dist/waffle --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waffle-linux
+          path: dist/waffle
+
+  # ── Windows binary ─────────────────────────────────────────────────────────
+  build-windows:
+    name: Build — Windows (waffle.exe)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller cryptography
+
+      - name: Build binary
+        run: |
+          python -m PyInstaller `
+            --onefile `
+            --name waffle `
+            --strip `
+            waffle.py
+
+      - name: Smoke test
+        run: |
+          .\dist\waffle.exe --version
+          .\dist\waffle.exe --help
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waffle-windows
+          path: dist/waffle.exe
+
+  # ── Draft release ──────────────────────────────────────────────────────────
+  release:
+    name: Create Draft Release
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-windows]   
+
+    steps:
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: waffle-linux
+          path: artifacts/linux
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: waffle-windows
+          path: artifacts/windows
+
+      - name: Make Linux binary executable
+        run: chmod +x artifacts/linux/waffle
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: "WAFFLE ${{ github.event.inputs.version }}"
+          draft: true
+          prerelease: false
+          files: |
+            artifacts/linux/waffle
+            artifacts/windows/waffle.exe
+          body: |
+            ## 🧇 WAFFLE ${{ github.event.inputs.version }}
+            **Web Access Filter & Firewall for Local Environments**
+
+            ---
+
+            ### 📥 Download
+            | Platform | File |
+            |----------|------|
+            | Linux    | `waffle` |
+            | Windows  | `waffle.exe` |
+
+            ---
+
+            ### 🚀 Quick start
+
+            **Linux**
+            ```bash
+            chmod +x waffle
+            sudo mv waffle /usr/local/bin/waffle
+
+            waffle --generate-ca
+            waffle --install-ca
+            # Close Chrome fully, then reopen
+            waffle --activate
+            waffle -a https://example.com
+            ```
+
+            **Windows** (run as Administrator)
+            ```bat
+            waffle.exe --generate-ca
+            waffle.exe --install-ca
+            :: Close Chrome fully, then reopen
+            waffle.exe --activate
+            waffle.exe -a https://example.com
+            ```
+
+            ---
+
+            ### 🔧 First-time setup (clone & run)
+            ```bash
+            git clone https://github.com/${{ github.repository }}.git
+            cd waffle
+
+            # Linux / macOS
+            bash setup.sh
+
+            # Windows
+            setup.bat
+            ```
