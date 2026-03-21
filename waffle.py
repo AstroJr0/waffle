@@ -35,14 +35,12 @@ from pathlib import Path
 from typing import Optional
 
 # ── Force UTF-8 on Windows ────────────────────────────────────────────────────
-# Must happen before ANY print() call. reconfigure() works inside PyInstaller
-# binaries where TextIOWrapper wrapping does not.
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except AttributeError:
-        # reconfigure not available (Python < 3.7) — set env var as last resort
+    
         os.environ.setdefault("PYTHONUTF8", "1")
 
 # ── Version & App identity ────────────────────────────────────────────────────
@@ -71,6 +69,7 @@ PIPE_TIMEOUT: int = 120     # idle bidirectional pipe timeout (seconds)
 
 # ── Block-page HTML & pre-built HTTP response ─────────────────────────────────
 
+# You Can Modify The Website Here :)
 BLOCKED_HTML: bytes = (
     b"<html><head><title>Blocked by WAFFLE</title>"
     b"<style>"
@@ -102,6 +101,7 @@ BLOCKED_HTML: bytes = (
     b"</body></html>"
 )
 
+# And This Is for The Request Calls
 BLOCKED_RESPONSE: bytes = (
     b"HTTP/1.1 403 Forbidden\r\n"
     b"Content-Type: text/html\r\n"
@@ -116,7 +116,7 @@ def _c(code: str, text: str) -> str:
     """Wrap text in an ANSI escape code, only when stdout is a TTY."""
     return f"\033[{code}m{text}\033[0m" if sys.stdout.isatty() else text
 
-# Colour callables — each takes a str and returns a (possibly coloured) str
+
 RED    = lambda t: _c("91", t)   # noqa: E731
 GREEN  = lambda t: _c("92", t)   # noqa: E731
 YELLOW = lambda t: _c("93", t)   # noqa: E731
@@ -224,12 +224,12 @@ class URLTrie:
         url  = _normalize(url)
         node = self._root
         for ch in url:
-            if node.is_end:              # stored prefix is shorter -> match
+            if node.is_end:              
                 return True
             if ch not in node.children:
                 return False
             node = node.children[ch]
-        return node.is_end               # exact-length match
+        return node.is_end               
 
     def _delete(self, node: _TrieNode, url: str, depth: int) -> bool:
         """Recursive deletion with dead-branch pruning."""
@@ -243,7 +243,7 @@ class URLTrie:
         if ch not in node.children:
             return False
         deleted: bool = self._delete(node.children[ch], url, depth + 1)
-        # Prune empty leaf nodes to keep memory compact
+        
         if deleted \
                 and not node.children[ch].children \
                 and not node.children[ch].is_end:
@@ -434,7 +434,7 @@ def _generate_ca_cryptography() -> None:
         )
         .sign(key, hashes.SHA256())
     )
-
+    # Oi, Just Use It first
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CA_KEY_PATH.write_bytes(key.private_bytes(
         serialization.Encoding.PEM,
@@ -718,7 +718,7 @@ def cmd_install_ca() -> None:
     # ── 3. Always print the manual Chrome fallback ────────────────────────────
     if not installed:
         print()
-    print(BOLD("  Manual Chrome install (always works):"))
+    print(BOLD("  Manual Chrome install (always works maybe?):"))
     print(f"  1.  Open  {CYAN('chrome://settings/certificates')}")
     print(f"  2.  Authorities  →  Import")
     print(f"  3.  Select: {CYAN(str(CA_CERT_PATH))}")
