@@ -34,6 +34,12 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
+# ── Force UTF-8 output on Windows (CP1252 can't handle ✔ ✖ ● etc.) ──────────
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 # ── Version & App identity ────────────────────────────────────────────────────
 
 __version__: str = "1.4.0"
