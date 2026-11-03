@@ -2,9 +2,9 @@ from setuptools import setup
 
 setup(
     name="waffle",
-    version="1.4.0",
+    version="2.0.0",
     description="WAFFLE — Web Access Filter & Firewall for Local Environments",
-    author="jayed",
+    author="AstroJr0",
     python_requires=">=3.9",
     py_modules=["waffle"],
     install_requires=[
