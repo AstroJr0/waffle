@@ -6,5 +6,5 @@ Probable comparison table:
 | Codebase | Python | Rust |
 | problems | doesn't work on chrome | it will be fixed |
 | speed | fast | very FAST |
-| simplicity | normal | same as `v1` |
+| simplicity | everything in one simple file | might be divided for better understanding |
 
