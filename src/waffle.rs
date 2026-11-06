@@ -689,7 +689,7 @@ pub fn integrate(enable: bool) -> Result<Integration> {
 // i was tired of handling proxies for chomium 
 // based browsers. Firfox and it's fork are so calm 
 // about it
-const BROWSER_DESKTOP_FILES: [&str; 7] = [
+const BROWSER_DESKTOP_FILES: [&str; 6] = [
     "google-chrome",
     "google-chrome-stable",
     "chromium",
