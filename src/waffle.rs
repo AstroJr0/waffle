@@ -461,8 +461,6 @@ fn nss_dirs() -> Vec<PathBuf> {
         ".var/app/com.google.Chrome/.pki/nssdb",
         ".var/app/org.chromium.Chromium/.pki/nssdb",
         ".var/app/com.brave.Browser/.pki/nssdb",
-        // ".var/app/com.microsoft.Edge/.pki/nssdb"
-        // do you really need MS Edge? Who tf uses that?!
         "snap/chromium/current/.pki/nssdb",
     ]
     .iter()
@@ -506,9 +504,9 @@ pub fn install_ca() -> Result<Install> {
 }
 
 fn install_system(cert: &Path) -> bool {
-    let debian = Path::new("/usr/local/share/ca-certificates");
-    if debian.is_dir() {
-        return fs::copy(cert, debian.join("waffle-local-ca.crt")).is_ok()
+    let some_var = Path::new("/usr/local/share/ca-certificates");
+    if some_var.is_dir() {
+        return fs::copy(cert, some_var.join("waffle-local-ca.crt")).is_ok()
             && succeeded(&mut Command::new("update-ca-certificates"));
     }
     succeeded(Command::new("trust").args(["anchor", "--store"]).arg(cert))
@@ -636,12 +634,15 @@ fn inject_cli_tools(enable: bool) -> Result<Vec<PathBuf>> {
     Ok(touched)
 }
 
-const UNIT_FILE: &str = "waffle.service";
+const UNIT_FILE: &str = "waffle.service"; // the actuall service
 
+// system will give the service a go
+// so no need to add something in your DE/Compositor
 fn set_autostart(enable: bool) -> Result<bool> {
     if !succeeded(Command::new("systemctl").args(["--user", "--version"])) {
         return Ok(false);
     }
+    // this service will be available for one user only
     let dir = HOME.join(".config/systemd/user");
     let unit = dir.join(UNIT_FILE);
     if !enable {
@@ -685,18 +686,23 @@ pub fn integrate(enable: bool) -> Result<Integration> {
     })
 }
 
+// i was tired of handling proxies for chomium 
+// based browsers. Firfox and it's fork are so calm 
+// about it
 const BROWSER_DESKTOP_FILES: [&str; 7] = [
     "google-chrome",
     "google-chrome-stable",
     "chromium",
     "chromium-browser",
     "brave-browser",
-    "microsoft-edge",
     "vivaldi-stable",
 ];
 
 fn patch_browsers(enable: bool) -> Result<Vec<PathBuf>> {
     let user_dir = HOME.join(".local/share/applications");
+    // chromium based browsers mostly use
+    // `--proxy-server` to add a proxy inside the broswer config
+    // so we inject that into the desktop files
     let flag = format!("--proxy-server={PROXY_HOST}:{PROXY_PORT}");
     let mut patched = Vec::new();
     for name in BROWSER_DESKTOP_FILES {
@@ -723,6 +729,8 @@ fn patch_browsers(enable: bool) -> Result<Vec<PathBuf>> {
     Ok(patched)
 }
 
+// we set the `Exec=`. taking helium browser for example:
+// Exec= helium-browser --proxt-server 127.0.0.1
 fn rewrite_exec(text: &str, flag: &str, enable: bool) -> String {
     let mut out = String::with_capacity(text.len() + 64);
     for line in text.lines() {
@@ -1212,7 +1220,7 @@ mod tests {
     fn subdomain_entry_leaves_the_apex_open() {
         let l = list(&["something.haramsite.com"]);
         assert_eq!(l.verdict("something.haramsite.com", None), Verdict::Block);
-        assert_eq!(l.verdict("haramsite.com", None), Verdict::Allow);
+        assert_eq!(l.verdict("haramsite.com", None), Verdict::Allow); // lets just say its an example
         assert_eq!(l.verdict("www.haramsite.com", Some("/")), Verdict::Allow);
         assert_eq!(l.verdict("other.haramsite.com", None), Verdict::Allow);
         assert_eq!(l.verdict("a.something.haramsite.com", None), Verdict::Allow);
