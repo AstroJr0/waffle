@@ -1,6 +1,7 @@
 name: Test
 
 on:
+  push:
   pull_request:
   workflow_dispatch:
 
@@ -40,6 +41,25 @@ jobs:
         run: |
           ./target/release/waffle --version
           ./target/release/waffle help
+
+  e2e:
+    name: Proxy end-to-end
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: End-to-end
+        env:
+          BIN: ${{ github.workspace }}/target/release/waffle
+        run: bash tests/e2e.sh
 
   lint:
     name: Fmt + Clippy
