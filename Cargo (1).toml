@@ -1,0 +1,30 @@
+[package]
+name = "waffle"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.88"
+
+[lib]
+name = "waffle"
+path = "src/waffle.rs"
+
+[dependencies]
+anyhow = "1"
+httparse = "1"
+nix = { version = "0.30", default-features = false, features = ["signal"] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = "0.3"
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+webpki-roots = "1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
