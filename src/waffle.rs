@@ -1,6 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
-use std::ffi::OsStr;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write as _;
 use std::net::IpAddr;
@@ -12,6 +11,7 @@ use std::str::FromStr;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
+use std::{fmt, io};
 
 use anyhow::{Context, Result, bail, ensure};
 use nix::sys::signal::{Signal, kill};
@@ -23,6 +23,7 @@ use rcgen::{
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -38,7 +39,8 @@ pub const PROXY_PORT: u16 = 8080;
 pub const DAEMON_ARG: &str = "--daemon";
 
 const CA_NAME: &str = "WAFFLE Local CA";
-const CONFIG_FILE: &str = "waffle.json";
+const SETTINGS_FILE: &str = "settings.json";
+const DEFAULT_DB_FILE: &str = "waffle.json";
 const PID_FILE: &str = "waffle.pid";
 const LOG_FILE: &str = "waffle.log";
 const CA_CERT: &str = "ca.crt";
@@ -63,51 +65,115 @@ fn config_path(name: &str) -> PathBuf {
     CONFIG_DIR.join(name)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Entry {
-    pub url: String,
-    #[serde(default = "whole_site")]
-    pub partial_block: Vec<String>,
+fn write_atomic(path: &Path, data: &[u8], mode: u32) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(mode)
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(data))
+        .with_context(|| format!("write {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))
 }
 
-fn whole_site() -> Vec<String> {
-    vec!["none".into()]
+fn read_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(e) => return Err(anyhow::Error::new(e).context(format!("read {}", path.display()))),
+    };
+    if text.trim().is_empty() {
+        return Ok(T::default());
+    }
+    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
 }
 
-enum Rule {
-    Whole,
-    Path(Box<str>),
-    Sub(Box<str>),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    host: String,
+    path: Option<String>,
 }
 
-impl FromStr for Rule {
+impl FromStr for Target {
     type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self> {
-        let s = s.trim().to_ascii_lowercase();
-        if s == "none" {
-            return Ok(Self::Whole);
-        }
-        if s.starts_with('/') {
-            let path = s.trim_end_matches('/');
-            return Ok(if path.is_empty() {
-                Self::Whole
-            } else {
-                Self::Path(path.into())
-            });
-        }
-        if s.len() > 1 && s.ends_with('.') && !s.contains(['/', ' ']) {
-            return Ok(Self::Sub(s.into()));
-        }
-        bail!("invalid partial_block rule {s:?}, expected \"none\", \"/path\" or \"sub.\"")
+    fn from_str(input: &str) -> Result<Self> {
+        let input = input.trim();
+        let rest = match input.split_once("://") {
+            Some((scheme, rest)) => {
+                ensure!(
+                    scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"),
+                    "unsupported protocol {scheme:?}, only http and https are accepted"
+                );
+                rest
+            }
+            None => input,
+        };
+        let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+        ensure!(
+            !authority.contains('@'),
+            "credentials in a url are not supported"
+        );
+        ensure!(
+            !authority.contains(':'),
+            "ports and non-web protocols are not supported"
+        );
+        let host = authority.trim_end_matches('.').to_ascii_lowercase();
+        let host = host.strip_prefix("www.").unwrap_or(&host).to_owned();
+        validate_host(&host)?;
+
+        let path = tail
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_ascii_lowercase();
+        ensure!(!path.contains(char::is_whitespace), "whitespace in path");
+        Ok(Self {
+            host,
+            path: (!path.is_empty()).then_some(path),
+        })
     }
 }
 
-#[derive(Default)]
-struct Site {
-    whole: bool,
-    paths: Vec<Box<str>>,
-    subs: Vec<Box<str>>,
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.host)?;
+        f.write_str(self.path.as_deref().unwrap_or_default())
+    }
+}
+
+fn validate_host(host: &str) -> Result<()> {
+    ensure!(
+        host.len() <= 253 && host.contains('.'),
+        "{host:?} is not a public domain name"
+    );
+    ensure!(
+        host.parse::<IpAddr>().is_err(),
+        "IP addresses are not supported"
+    );
+    ensure!(
+        !host.ends_with(".localhost") && !host.ends_with(".local"),
+        "{host:?} is a local name"
+    );
+    for label in host.split('.') {
+        let valid = (1..=63).contains(&label.len())
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        ensure!(
+            valid,
+            "invalid label {label:?} in {host:?} (non-ASCII names must be punycode)"
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,34 +183,26 @@ pub enum Verdict {
     Inspect,
 }
 
+#[derive(Default)]
+struct Site {
+    whole: bool,
+    paths: Vec<Box<str>>,
+}
+
 pub struct Blocklist {
-    sites: HashMap<String, Site>,
+    sites: HashMap<Box<str>, Site>,
 }
 
 impl Blocklist {
-    pub fn build(entries: &[Entry]) -> Result<Self> {
-        let mut sites: HashMap<String, Site> = HashMap::with_capacity(entries.len());
-        for entry in entries {
-            let (host, url_path) =
-                split_url(&entry.url).with_context(|| format!("bad url {:?}", entry.url))?;
-            let url_path = url_path.trim_end_matches('/').to_ascii_lowercase();
-            let mut rules = entry
-                .partial_block
-                .iter()
-                .map(|rule| rule.parse::<Rule>())
-                .collect::<Result<Vec<_>>>()
-                .with_context(|| format!("in entry {:?}", entry.url))?;
-            if rules.is_empty() {
-                rules.push(Rule::Whole);
-            }
-            let site = sites.entry(host).or_default();
-            for rule in rules {
-                match rule {
-                    Rule::Whole if url_path.is_empty() => site.whole = true,
-                    Rule::Whole => site.paths.push(url_path.as_str().into()),
-                    Rule::Path(path) => site.paths.push(path),
-                    Rule::Sub(sub) => site.subs.push(sub),
-                }
+    pub fn build<S: AsRef<str>>(urls: &[S]) -> Result<Self> {
+        let mut sites: HashMap<Box<str>, Site> = HashMap::with_capacity(urls.len());
+        for url in urls {
+            let url = url.as_ref();
+            let target: Target = url.parse().with_context(|| format!("bad entry {url:?}"))?;
+            let site = sites.entry(target.host.into()).or_default();
+            match target.path {
+                Some(path) => site.paths.push(path.into()),
+                None => site.whole = true,
             }
         }
         Ok(Self { sites })
@@ -158,38 +216,16 @@ impl Blocklist {
         if host.bytes().any(|b| b.is_ascii_uppercase()) {
             return self.verdict(&host.to_ascii_lowercase(), path);
         }
-        let bare = host.strip_prefix("www.").unwrap_or(host);
-        let mut verdict = Verdict::Allow;
-        let mut suffix = host;
-        loop {
-            if let Some(site) = self.sites.get(suffix) {
-                if suffix == bare {
-                    if site.whole {
-                        return Verdict::Block;
-                    }
-                    match path {
-                        Some(path) if site.paths.iter().any(|rule| path_matches(path, rule)) => {
-                            return Verdict::Block;
-                        }
-                        None if !site.paths.is_empty() => verdict = Verdict::Inspect,
-                        _ => {}
-                    }
-                } else {
-                    let labels = &host[..host.len() - suffix.len()];
-                    let hit = site.subs.iter().any(|sub| {
-                        labels
-                            .strip_suffix(&**sub)
-                            .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
-                    });
-                    if hit {
-                        return Verdict::Block;
-                    }
-                }
-            }
-            match suffix.split_once('.') {
-                Some((_, rest)) => suffix = rest,
-                None => return verdict,
-            }
+        let Some(site) = self.sites.get(host.strip_prefix("www.").unwrap_or(host)) else {
+            return Verdict::Allow;
+        };
+        if site.whole {
+            return Verdict::Block;
+        }
+        match path {
+            Some(path) if site.paths.iter().any(|rule| path_matches(path, rule)) => Verdict::Block,
+            Some(_) => Verdict::Allow,
+            None => Verdict::Inspect,
         }
     }
 }
@@ -199,19 +235,6 @@ fn path_matches(path: &str, rule: &str) -> bool {
     path.get(..rule.len())
         .is_some_and(|head| head.eq_ignore_ascii_case(rule))
         && matches!(path.as_bytes().get(rule.len()), None | Some(b'/'))
-}
-
-fn split_url(url: &str) -> Result<(String, &str)> {
-    let url = url.trim();
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, a)| a);
-    let (host, _) = split_host_port(authority, 0);
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host).to_owned();
-    ensure!(!host.is_empty(), "empty host");
-    let path = tail.split(['?', '#']).next().unwrap_or_default();
-    Ok((host, path))
 }
 
 fn split_host_port(target: &str, default: u16) -> (&str, u16) {
@@ -232,54 +255,73 @@ fn toggle_www(host: &str) -> String {
         .map_or_else(|| format!("www.{host}"), str::to_owned)
 }
 
-pub fn load_entries() -> Result<Vec<Entry>> {
-    let path = config_path(CONFIG_FILE);
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(anyhow::Error::new(e).context(format!("read {}", path.display()))),
-    };
-    if text.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
+#[derive(Default, Serialize, Deserialize)]
+pub struct Settings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
-pub fn save_entries(entries: &[Entry]) -> Result<()> {
-    Blocklist::build(entries)?;
-    let mut merged: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for entry in entries {
-        merged
-            .entry(entry.url.trim())
-            .or_default()
-            .extend(entry.partial_block.iter().map(String::as_str));
+impl Settings {
+    pub fn load() -> Result<Self> {
+        read_json(&config_path(SETTINGS_FILE))
     }
-    let out: Vec<Entry> = merged
-        .into_iter()
-        .map(|(url, mut rules)| {
-            rules.sort_unstable();
-            rules.dedup();
-            Entry {
-                url: url.to_owned(),
-                partial_block: if rules.is_empty() {
-                    whole_site()
-                } else {
-                    rules.into_iter().map(str::to_owned).collect()
-                },
-            }
-        })
-        .collect();
 
-    fs::create_dir_all(&*CONFIG_DIR)?;
-    let path = config_path(CONFIG_FILE);
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(&out)? + "\n")
-        .with_context(|| format!("write {}", tmp.display()))?;
-    fs::rename(&tmp, &path).with_context(|| format!("replace {}", path.display()))
+    pub fn save(&self) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)? + "\n";
+        write_atomic(&config_path(SETTINGS_FILE), json.as_bytes(), 0o600)
+    }
+
+    pub fn db_path(&self) -> PathBuf {
+        self.db
+            .clone()
+            .unwrap_or_else(|| config_path(DEFAULT_DB_FILE))
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct Db {
+    pub urls: Vec<String>,
+}
+
+impl Db {
+    pub fn load(path: &Path) -> Result<Self> {
+        read_json(path)
+    }
+
+    pub fn blocklist(&self) -> Result<Blocklist> {
+        Blocklist::build(&self.urls)
+    }
+
+    pub fn insert(&mut self, target: &Target) -> bool {
+        let url = target.to_string();
+        let new = !self.urls.contains(&url);
+        if new {
+            self.urls.push(url);
+        }
+        new
+    }
+
+    pub fn remove(&mut self, target: &Target) -> bool {
+        let url = target.to_string();
+        let before = self.urls.len();
+        self.urls.retain(|u| *u != url);
+        self.urls.len() != before
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.blocklist()?;
+        let mut urls = self.urls.clone();
+        urls.sort_unstable();
+        urls.dedup();
+        let json = serde_json::to_string_pretty(&Self { urls })? + "\n";
+        write_atomic(path, json.as_bytes(), 0o644)
+    }
 }
 
 pub fn load_blocklist() -> Result<Blocklist> {
-    Blocklist::build(&load_entries()?)
+    Db::load(&Settings::load()?.db_path())?.blocklist()
 }
 
 const BLOCK_PAGE: &str = r#"<!doctype html>
@@ -468,45 +510,13 @@ fn install_system(cert: &Path) -> bool {
     succeeded(Command::new("trust").args(["anchor", "--store"]).arg(cert))
 }
 
-pub struct CaStatus {
-    pub cert: bool,
-    pub key: bool,
-    pub nss: Vec<(PathBuf, bool)>,
-}
-
-pub fn ca_status() -> CaStatus {
-    let nss = nss_dirs()
-        .into_iter()
-        .filter(|dir| dir.exists())
-        .map(|dir| {
-            let db = format!("sql:{}", dir.display());
-            let trusted =
-                succeeded(Command::new("certutil").args(["-L", "-d", db.as_str(), "-n", CA_NAME]));
-            (dir, trusted)
-        })
-        .collect();
-    CaStatus {
-        cert: config_path(CA_CERT).exists(),
-        key: config_path(CA_KEY).exists(),
-        nss,
-    }
-}
-
-pub enum SystemProxy {
-    Applied,
-    EnvFiles { fish: PathBuf, sh: PathBuf },
-}
-
-pub fn set_system_proxy(enable: bool) -> Result<SystemProxy> {
+fn set_system_proxy(enable: bool) -> bool {
     let port = PROXY_PORT.to_string();
     if cfg!(target_os = "macos") {
         macos_proxy(enable, &port);
-        return Ok(SystemProxy::Applied);
+        return true;
     }
-    if gnome_proxy(enable, &port) {
-        return Ok(SystemProxy::Applied);
-    }
-    env_files(enable)
+    gnome_proxy(enable, &port)
 }
 
 fn macos_proxy(enable: bool, port: &str) {
@@ -553,27 +563,86 @@ fn gnome_proxy(enable: bool, port: &str) -> bool {
     ok & set("org.gnome.system.proxy", "mode", "manual")
 }
 
-fn env_files(enable: bool) -> Result<SystemProxy> {
-    fs::create_dir_all(&*CONFIG_DIR)?;
-    let url = format!("http://{PROXY_HOST}:{PROXY_PORT}");
-    let names = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"];
-    let (fish, sh) = if enable {
-        (
-            names.map(|n| format!("set -x {n} {url}\n")).concat(),
-            names.map(|n| format!("export {n}={url}\n")).concat(),
-        )
-    } else {
-        (
-            names.map(|n| format!("set -e {n}\n")).concat(),
-            names.map(|n| format!("unset {n}\n")).concat(),
-        )
+const MARK_BEGIN: &str = "# >>> waffle >>>";
+const MARK_END: &str = "# <<< waffle <<<";
+
+fn strip_block(text: &str) -> String {
+    match (text.find(MARK_BEGIN), text.find(MARK_END)) {
+        (Some(start), Some(end)) if start < end => {
+            let after = &text[end + MARK_END.len()..];
+            format!(
+                "{}{}",
+                &text[..start],
+                after.strip_prefix('\n').unwrap_or(after)
+            )
+        }
+        _ => text.to_owned(),
+    }
+}
+
+fn edit_block(path: &Path, body: Option<&str>, create: bool) -> Result<bool> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound && create && body.is_some() => String::new(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(anyhow::Error::new(e).context(format!("read {}", path.display()))),
     };
-    let (fish_path, sh_path) = (config_path("waffle.fish"), config_path("waffle.sh"));
-    fs::write(&fish_path, fish)?;
-    fs::write(&sh_path, sh)?;
-    Ok(SystemProxy::EnvFiles {
-        fish: fish_path,
-        sh: sh_path,
+    let mut updated = strip_block(&text);
+    if let Some(body) = body {
+        if !updated.is_empty() && !updated.ends_with('\n') {
+            updated.push('\n');
+        }
+        updated.push_str(&format!("{MARK_BEGIN}\n{body}\n{MARK_END}\n"));
+    }
+    if updated == text {
+        return Ok(false);
+    }
+    fs::write(path, updated).with_context(|| format!("write {}", path.display()))?;
+    Ok(true)
+}
+
+fn inject_cli_tools(enable: bool) -> Result<Vec<PathBuf>> {
+    let url = format!("http://{PROXY_HOST}:{PROXY_PORT}");
+    let skip = "localhost,127.0.0.1,::1";
+    let names = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"];
+    let sh = enable.then(|| {
+        let exports = names.map(|n| format!("export {n}={url}\n")).concat();
+        format!("{exports}export no_proxy={skip}\nexport NO_PROXY={skip}")
+    });
+    let fish = enable.then(|| {
+        let sets = names.map(|n| format!("set -gx {n} {url}\n")).concat();
+        format!("{sets}set -gx no_proxy {skip}\nset -gx NO_PROXY {skip}")
+    });
+    let curl = enable.then(|| format!("proxy = \"{url}\"\nnoproxy = \"localhost,127.0.0.1\""));
+
+    let fish_path = HOME.join(".config/fish/conf.d/waffle.fish");
+    let fish_dir = fish_path.parent().is_some_and(Path::is_dir);
+    let targets = [
+        (HOME.join(".curlrc"), curl.as_deref(), true),
+        (HOME.join(".bashrc"), sh.as_deref(), false),
+        (HOME.join(".zshrc"), sh.as_deref(), false),
+        (fish_path, fish.as_deref(), fish_dir),
+    ];
+    let mut touched = Vec::new();
+    for (path, body, create) in targets {
+        if edit_block(&path, body, create)? {
+            touched.push(path);
+        }
+    }
+    Ok(touched)
+}
+
+pub struct Integration {
+    pub system_proxy: bool,
+    pub browsers: Vec<PathBuf>,
+    pub tools: Vec<PathBuf>,
+}
+
+pub fn integrate(enable: bool) -> Result<Integration> {
+    Ok(Integration {
+        system_proxy: set_system_proxy(enable),
+        browsers: patch_browsers(enable)?,
+        tools: inject_cli_tools(enable)?,
     })
 }
 
@@ -587,7 +656,7 @@ const BROWSER_DESKTOP_FILES: [&str; 7] = [
     "vivaldi-stable",
 ];
 
-pub fn patch_browsers(enable: bool) -> Result<Vec<PathBuf>> {
+fn patch_browsers(enable: bool) -> Result<Vec<PathBuf>> {
     let user_dir = HOME.join(".local/share/applications");
     let flag = format!("--proxy-server={PROXY_HOST}:{PROXY_PORT}");
     let mut patched = Vec::new();
@@ -646,7 +715,7 @@ fn alive(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(|pid| kill(Pid::from_raw(pid), None).is_ok())
 }
 
-fn running_pid() -> Option<u32> {
+pub fn running() -> Option<u32> {
     read_pid().filter(|&pid| alive(pid))
 }
 
@@ -655,29 +724,9 @@ fn send_signal(pid: u32, sig: Signal) -> Result<()> {
     Ok(())
 }
 
-pub struct Status {
-    pub pid: Option<u32>,
-    pub ssl_bump: bool,
-    pub blocked: usize,
-}
-
-pub fn status() -> Result<Status> {
-    Ok(Status {
-        pid: running_pid(),
-        ssl_bump: ca_available(),
-        blocked: load_entries()?.len(),
-    })
-}
-
-pub struct Activated {
-    pub pid: u32,
-    pub proxy: SystemProxy,
-    pub browsers: Vec<PathBuf>,
-}
-
-pub fn activate() -> Result<Activated> {
-    if let Some(pid) = running_pid() {
-        bail!("already running (pid {pid})");
+pub fn activate() -> Result<u32> {
+    if let Some(pid) = running() {
+        return Ok(pid);
     }
     ensure!(
         std::net::TcpListener::bind((PROXY_HOST, PROXY_PORT)).is_ok(),
@@ -706,21 +755,17 @@ pub fn activate() -> Result<Activated> {
 
     for _ in 0..30 {
         thread::sleep(Duration::from_millis(100));
-        if let Some(pid) = running_pid() {
-            return Ok(Activated {
-                pid,
-                proxy: set_system_proxy(true)?,
-                browsers: patch_browsers(true)?,
-            });
+        if let Some(pid) = running() {
+            return Ok(pid);
         }
     }
     bail!("daemon did not start, see {}", log_path.display())
 }
 
-pub fn deactivate() -> Result<SystemProxy> {
-    let Some(pid) = running_pid() else {
+pub fn deactivate() -> Result<bool> {
+    let Some(pid) = running() else {
         let _ = fs::remove_file(config_path(PID_FILE));
-        bail!("not running");
+        return Ok(false);
     };
     send_signal(pid, Signal::SIGTERM)?;
     let stopped = (0..50).any(|_| {
@@ -731,13 +776,15 @@ pub fn deactivate() -> Result<SystemProxy> {
         send_signal(pid, Signal::SIGKILL)?;
     }
     let _ = fs::remove_file(config_path(PID_FILE));
-    patch_browsers(false)?;
-    set_system_proxy(false)
+    Ok(true)
 }
 
-pub fn reload() -> Result<()> {
-    let pid = running_pid().context("not running")?;
-    send_signal(pid, Signal::SIGHUP)
+pub fn reload() -> Result<bool> {
+    let Some(pid) = running() else {
+        return Ok(false);
+    };
+    send_signal(pid, Signal::SIGHUP)?;
+    Ok(true)
 }
 
 struct PidGuard;
@@ -773,15 +820,15 @@ pub fn run_daemon() -> Result<()> {
 }
 
 async fn daemon() -> Result<()> {
-    let entries = load_entries()?;
-    let proxy = Arc::new(Proxy::new(Blocklist::build(&entries)?)?);
+    let db = Db::load(&Settings::load()?.db_path())?;
+    let proxy = Arc::new(Proxy::new(db.blocklist()?)?);
     let listener = TcpListener::bind((PROXY_HOST, PROXY_PORT))
         .await
         .with_context(|| format!("bind {PROXY_HOST}:{PROXY_PORT}"))?;
     let _pid = PidGuard::create()?;
     info!(
         "listening on {PROXY_HOST}:{PROXY_PORT}, {} entries, ssl bump {}",
-        entries.len(),
+        db.urls.len(),
         if proxy.ca.is_some() { "on" } else { "off" }
     );
 
@@ -1103,45 +1150,38 @@ fn forward_head(req: &httparse::Request<'_, '_>, target: &str) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn list(entries: &[(&str, &[&str])]) -> Blocklist {
-        let entries: Vec<Entry> = entries
-            .iter()
-            .map(|(url, rules)| Entry {
-                url: (*url).into(),
-                partial_block: rules.iter().map(|r| (*r).into()).collect(),
-            })
-            .collect();
-        Blocklist::build(&entries).unwrap()
+    fn list(urls: &[&str]) -> Blocklist {
+        Blocklist::build(urls).unwrap()
+    }
+
+    fn target(input: &str) -> Result<Target> {
+        input.parse()
     }
 
     #[test]
-    fn whole_site_covers_apex_and_www_only() {
-        let l = list(&[("https://Example.com/", &["none"])]);
+    fn whole_host_covers_apex_and_www_only() {
+        let l = list(&["example.com"]);
         assert_eq!(l.verdict("example.com", None), Verdict::Block);
         assert_eq!(l.verdict("www.example.com", None), Verdict::Block);
-        assert_eq!(l.verdict("EXAMPLE.com", Some("/x")), Verdict::Block);
+        assert_eq!(l.verdict("EXAMPLE.com.", Some("/x")), Verdict::Block);
         assert_eq!(l.verdict("sub.example.com", None), Verdict::Allow);
         assert_eq!(l.verdict("notexample.com", None), Verdict::Allow);
         assert_eq!(l.verdict("example.com.evil.org", None), Verdict::Allow);
     }
 
     #[test]
-    fn subdomain_rule_blocks_only_that_subtree() {
-        let l = list(&[("haramsite.com", &["something."])]);
+    fn subdomain_entry_leaves_the_apex_open() {
+        let l = list(&["something.haramsite.com"]);
         assert_eq!(l.verdict("something.haramsite.com", None), Verdict::Block);
-        assert_eq!(
-            l.verdict("a.b.something.haramsite.com", None),
-            Verdict::Block
-        );
         assert_eq!(l.verdict("haramsite.com", None), Verdict::Allow);
         assert_eq!(l.verdict("www.haramsite.com", Some("/")), Verdict::Allow);
         assert_eq!(l.verdict("other.haramsite.com", None), Verdict::Allow);
-        assert_eq!(l.verdict("xsomething.haramsite.com", None), Verdict::Allow);
+        assert_eq!(l.verdict("a.something.haramsite.com", None), Verdict::Allow);
     }
 
     #[test]
-    fn path_rule_needs_inspection_then_matches_on_segments() {
-        let l = list(&[("example.com", &["/ads/"])]);
+    fn path_entry_needs_inspection_then_matches_on_segments() {
+        let l = list(&["example.com/ads", "shop.example.com/cart"]);
         assert_eq!(l.verdict("example.com", None), Verdict::Inspect);
         assert_eq!(l.verdict("www.example.com", None), Verdict::Inspect);
         assert_eq!(l.verdict("example.com", Some("/ads")), Verdict::Block);
@@ -1154,39 +1194,81 @@ mod tests {
             l.verdict("example.com", Some("/x?next=/ads")),
             Verdict::Allow
         );
+        assert_eq!(
+            l.verdict("shop.example.com", Some("/cart/1")),
+            Verdict::Block
+        );
+        assert_eq!(l.verdict("shop.example.com", Some("/ads")), Verdict::Allow);
     }
 
     #[test]
-    fn url_path_acts_as_prefix_rule() {
-        let l = list(&[("https://example.com/foo/", &["none"])]);
-        assert_eq!(l.verdict("example.com", None), Verdict::Inspect);
-        assert_eq!(l.verdict("example.com", Some("/foo/bar")), Verdict::Block);
-        assert_eq!(l.verdict("example.com", Some("/")), Verdict::Allow);
+    fn whole_entry_wins_over_path_entry() {
+        let l = list(&["example.com/ads", "example.com"]);
+        assert_eq!(l.verdict("example.com", None), Verdict::Block);
     }
 
     #[test]
-    fn rules_combine_and_slash_means_whole_site() {
-        let l = list(&[("a.com", &["/x", "m."]), ("b.com", &["/"]), ("c.com", &[])]);
-        assert_eq!(l.verdict("m.a.com", None), Verdict::Block);
-        assert_eq!(l.verdict("a.com", Some("/x")), Verdict::Block);
-        assert_eq!(l.verdict("a.com", Some("/y")), Verdict::Allow);
-        assert_eq!(l.verdict("b.com", None), Verdict::Block);
-        assert_eq!(l.verdict("c.com", None), Verdict::Block);
+    fn targets_are_normalised() {
+        let norm = |s: &str| target(s).unwrap().to_string();
+        assert_eq!(
+            norm("HTTPS://WWW.Example.com/Foo/?q=1#x"),
+            "example.com/foo"
+        );
+        assert_eq!(norm("example.com/"), "example.com");
+        assert_eq!(norm("http://example.com?x=1"), "example.com");
+        assert_eq!(
+            norm("  Something.HaramSite.com/A/b/ "),
+            "something.haramsite.com/a/b"
+        );
+        assert_eq!(norm("example.com."), "example.com");
     }
 
     #[test]
-    fn invalid_rules_are_rejected() {
-        let bad = |rule: &str| {
-            Blocklist::build(&[Entry {
-                url: "a.com".into(),
-                partial_block: vec![rule.into()],
-            }])
-            .is_err()
-        };
-        assert!(bad("foo"));
-        assert!(bad("."));
-        assert!(bad("a/b."));
-        assert!(!bad("NONE"));
+    fn non_web_and_local_targets_are_rejected() {
+        let bad = [
+            "chrome://settings",
+            "file:///etc/passwd",
+            "view-source:https://example.com",
+            "about:blank",
+            "javascript:alert(1)",
+            "ftp://example.com",
+            "socks5://127.0.0.1:1080",
+            "localhost",
+            "localhost:3000",
+            "http://localhost:8080",
+            "127.0.0.1:8080",
+            "http://127.0.0.1",
+            "http://0.0.0.0",
+            "https://[::1]/",
+            "foo.localhost",
+            "printer.local",
+            "user@example.com",
+            "http://example.com@evil.com",
+            "example.com:8080",
+            "https://example.com:443",
+            "exämple.com",
+            "-bad.com",
+            "a..com",
+            "example.com/a b",
+            "",
+            "   ",
+        ];
+        for input in bad {
+            assert!(target(input).is_err(), "{input:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn web_targets_are_accepted() {
+        for input in [
+            "example.com",
+            "http://example.com",
+            "https://something.haramsite.com/path",
+            "EXAMPLE.com/Path/",
+            "xn--mnchen-3ya.de",
+        ] {
+            assert!(target(input).is_ok(), "{input:?} should be accepted");
+        }
     }
 
     #[test]
@@ -1221,5 +1303,12 @@ mod tests {
         assert!(on.contains("Exec=chrome --proxy-server=127.0.0.1:8080 --incognito\n"));
         assert_eq!(rewrite_exec(&on, flag, true), on);
         assert_eq!(rewrite_exec(&on, flag, false), src);
+    }
+
+    #[test]
+    fn managed_block_is_removed_cleanly() {
+        let text = format!("keep\n{MARK_BEGIN}\nx\n{MARK_END}\ntail\n");
+        assert_eq!(strip_block(&text), "keep\ntail\n");
+        assert_eq!(strip_block("plain\n"), "plain\n");
     }
 }
