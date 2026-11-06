@@ -3,7 +3,7 @@
 First of all,, respect for wanting to contribute to a parental control tool
 built by a teenager trying to be better. That's genuinely cool! thanks you!
 
-## The Rules (non-negotiable)
+## The Rules
 
 ### 1. Don't lie to the codebase
 - No fake benchmarks.
