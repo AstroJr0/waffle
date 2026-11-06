@@ -686,8 +686,8 @@ pub fn integrate(enable: bool) -> Result<Integration> {
     })
 }
 
-// i was tired of handling proxies for chomium 
-// based browsers. Firfox and it's fork are so calm 
+// i was tired of handling proxies for chromium
+// based browsers. Firefox and its fork are so calm
 // about it
 const BROWSER_DESKTOP_FILES: [&str; 6] = [
     "google-chrome",
