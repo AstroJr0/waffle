@@ -34,7 +34,7 @@ use tokio::time::timeout;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{debug, info, warn};
 
-pub const PROXY_HOST: &str = "127.0.0.1";
+pub const PROXY_HOST: &str = "127.0.0.1"; // proxy server ip. add this inside your browser.
 pub const PROXY_PORT: u16 = 8080;
 pub const DAEMON_ARG: &str = "--daemon";
 
@@ -250,6 +250,7 @@ fn split_host_port(target: &str, default: u16) -> (&str, u16) {
     }
 }
 
+// haramsite.com -> www.haramsite.com
 fn toggle_www(host: &str) -> String {
     host.strip_prefix("www.")
         .map_or_else(|| format!("www.{host}"), str::to_owned)
@@ -280,6 +281,8 @@ impl Settings {
     }
 }
 
+// this is the json database
+// waffle saves the blocked sites inside this
 #[derive(Default, Serialize, Deserialize)]
 pub struct Db {
     pub urls: Vec<String>,
@@ -332,11 +335,11 @@ const BLOCK_PAGE: &str = r#"<!doctype html>
 <style>
 *{margin:0;box-sizing:border-box;border-radius:0}
 body{min-height:100vh;display:grid;place-items:center;padding:24px;background:#020c03;color:#3dff5e;font:16px/1.5 Tahoma,Verdana,"DejaVu Sans",sans-serif}
-main{width:100%;max-width:560px;padding:40px;border:3px solid #3dff5e}
-h1{font-size:28px;letter-spacing:.24em;text-transform:uppercase}
+main{width:100%;max-width:560px;padding:40px;border:4px solid #3dff5e}
+h1{font-size:28px;letter-spacing:.24em;}
 p{margin-top:16px;color:#22a83c;word-break:break-all}
 </style>
-<main><h1>Blocked</h1><p id="url"></p></main>
+<main><h1>This site is blocked by WAFFLE :(</h1><p id="url"></p></main>
 <script>document.getElementById("url").textContent=location.href</script>
 "#;
 
@@ -458,7 +461,8 @@ fn nss_dirs() -> Vec<PathBuf> {
         ".var/app/com.google.Chrome/.pki/nssdb",
         ".var/app/org.chromium.Chromium/.pki/nssdb",
         ".var/app/com.brave.Browser/.pki/nssdb",
-        ".var/app/com.microsoft.Edge/.pki/nssdb",
+        // ".var/app/com.microsoft.Edge/.pki/nssdb"
+        // do you really need MS Edge? Who tf uses that?!
         "snap/chromium/current/.pki/nssdb",
     ]
     .iter()
