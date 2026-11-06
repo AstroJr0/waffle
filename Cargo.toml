@@ -14,7 +14,7 @@ path = "src/cli.rs"
 
 [dependencies]
 anyhow = "1"
-argon2 = { version = "0.6" }
+argon2 = { version = "0.5" }
 httparse = "1"
 nix = { version = "0.31.3", default-features = false, features = ["signal"] }
 rcgen = "0.14"
