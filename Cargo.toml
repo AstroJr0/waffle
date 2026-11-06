@@ -14,9 +14,9 @@ path = "src/cli.rs"
 
 [dependencies]
 anyhow = "1"
-argon2 = { version = "0.5", features = ["std"] }
+argon2 = { version = "0.6", features = ["std"] }
 httparse = "1"
-nix = { version = "0.30", default-features = false, features = ["signal"] }
+nix = { version = "0.31.3", default-features = false, features = ["signal"] }
 rcgen = "0.14"
 rpassword = "7"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
