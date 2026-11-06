@@ -1,5 +1,5 @@
 use std::fmt::Display;
-use std::io::{self, IsTerminal};
+use std::io::{self, BufRead, IsTerminal};
 use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
@@ -83,6 +83,15 @@ fn parse_all(inputs: &[String]) -> Result<Vec<Target>> {
         .collect()
 }
 
+fn read_password(prompt: &str) -> Result<String> {
+    if io::stdin().is_terminal() {
+        return Ok(rpassword::prompt_password(prompt)?);
+    }
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+}
+
 fn authenticate() -> Result<Settings> {
     let settings = Settings::load()?;
     let stored = settings
@@ -91,7 +100,7 @@ fn authenticate() -> Result<Settings> {
         .context("not set up yet, run `waffle init`")?;
     let hash = PasswordHash::new(stored).context("stored password hash is corrupt")?;
     for attempt in 1..=MAX_TRIES {
-        let input = rpassword::prompt_password("password: ")?;
+        let input = read_password("password: ")?;
         if Argon2::default()
             .verify_password(input.as_bytes(), &hash)
             .is_ok()
@@ -107,12 +116,12 @@ fn authenticate() -> Result<Settings> {
 }
 
 fn new_password() -> Result<String> {
-    let first = rpassword::prompt_password("new password: ")?;
+    let first = read_password("new password: ")?;
     ensure!(
         first.chars().count() >= MIN_PASSWORD,
         "password must be at least {MIN_PASSWORD} characters"
     );
-    let again = rpassword::prompt_password("repeat password: ")?;
+    let again = read_password("repeat password: ")?;
     ensure!(first == again, "passwords do not match");
     let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default()
@@ -212,6 +221,11 @@ fn init() -> Result<()> {
         ok("system proxy set");
     } else {
         note("no desktop proxy backend found, system proxy not set");
+    }
+    if integration.autostart {
+        ok("autostart enabled (systemd user unit)");
+    } else {
+        note("no systemd user session, run `waffle init` again after each reboot");
     }
     for path in integration.browsers.iter().chain(&integration.tools) {
         ok(format!("proxy injected into {}", path.display()));
