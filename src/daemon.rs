@@ -104,21 +104,6 @@ pub fn reload() -> Result<bool> {
     Ok(true)
 }
 
-struct PidGuard;
-
-impl PidGuard {
-    fn create() -> std::io::Result<Self> {
-        fs::write(config_path(PID_FILE), std::process::id().to_string())?;
-        Ok(Self)
-    }
-}
-
-impl Drop for PidGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(config_path(PID_FILE));
-    }
-}
-
 pub fn run_daemon() -> Result<()> {
     let level = match std::env::var("WAFFLE_LOG").as_deref() {
         Ok("debug") => tracing::Level::DEBUG,
