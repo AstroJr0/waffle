@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use argon2::Argon2;
-use argon2::password_hash::rand_core::OsRng;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::phc::PasswordHash;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use waffle::{Db, Settings, Target};
 
 const MAX_TRIES: u32 = 3;
@@ -123,9 +123,8 @@ fn new_password() -> Result<String> {
     );
     let again = read_password("repeat password: ")?;
     ensure!(first == again, "passwords do not match");
-    let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default()
-        .hash_password(first.as_bytes(), &salt)?
+        .hash_password(first.as_bytes())?
         .to_string())
 }
 
