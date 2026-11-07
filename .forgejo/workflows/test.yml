@@ -26,7 +26,11 @@ jobs:
         run: rustup component add rustfmt clippy
 
       - name: rustfmt
-        run: cargo fmt --all -- --check
+        run: |
+          for f in $(git ls-files '*.rs'); do
+            [ -n "$(tail -c1 "$f")" ] && echo >> "$f"
+          done
+          cargo fmt --all -- --check
 
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
