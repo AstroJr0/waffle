@@ -11,9 +11,9 @@ env:
 jobs:
   check:
     name: Fmt, Clippy, Test
-    runs-on: codeberg-small
-    container:
-      image: rust:1
+    runs-on: ubuntu-latest
+    container: 
+        image: rust:1
     steps:
       - name: Checkout
         run: |
